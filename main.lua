@@ -265,7 +265,10 @@ end
 local whisper = ffi.load("whisper.dll")
 
 print("Initializing Whisper model...")
-local ctx = whisper.whisper_init_from_file("ggml-base.bin")
+-- local ctx = whisper.whisper_init_from_file("ggml-base.bin")
+local ctx = whisper.whisper_init_from_file("ggml-base-q5_1.bin")
+-- local ctx = whisper.whisper_init_from_file("ggml-tiny-q5_1.bin")
+-- local ctx = whisper.whisper_init_from_file("ggml-tiny.bin")
 if ctx == nil then
     error("Failed to initialize whisper context")
 end
