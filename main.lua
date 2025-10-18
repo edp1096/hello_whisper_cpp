@@ -1,4 +1,4 @@
-local ffi = require("ffi")
+local ffi = require "ffi"
 
 ffi.cdef [[
     typedef struct whisper_context whisper_context;
