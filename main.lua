@@ -1,6 +1,5 @@
 local ffi = require "ffi"
 
--- Add current directory to package path for audio_conv.lua
 package.path = package.path .. ";./?.lua"
 
 local audio_conv = require "audio_conv"
@@ -113,6 +112,9 @@ ffi.cdef [[
         struct whisper_context * ctx,
         int i_segment);
 
+    int whisper_full_lang_id(struct whisper_context * ctx);
+    const char * whisper_lang_str(int id);
+
     typedef unsigned short wchar_t;
     int MultiByteToWideChar(unsigned int CodePage, unsigned long dwFlags, const char* lpMultiByteStr, int cbMultiByte, wchar_t* lpWideCharStr, int cchWideChar);
     int WideCharToMultiByte(unsigned int CodePage, unsigned long dwFlags, const wchar_t* lpWideCharStr, int cchWideChar, char* lpMultiByteStr, int cbMultiByte, const char* lpDefaultChar, int* lpUsedDefaultChar);
@@ -145,15 +147,29 @@ local function utf8_to_cp949(utf8_str)
     return ffi.string(cp949_str)
 end
 
-local function transcribe_and_print(whisper, ctx, audio_data, n_samples, language, translate, convert_to_cp949)
+local function transcribe_and_print(whisper, ctx, audio_data, n_samples, auto_detect, translate, convert_to_cp949)
     local params = whisper.whisper_full_default_params(0)
-    params.language = language
+
+    if auto_detect then
+        params.language = nil
+        params.detect_language = false
+    else
+        params.language = "ko"
+        params.detect_language = false
+    end
+
     params.translate = translate
     params.print_progress = false
 
     local result = whisper.whisper_full(ctx, params, audio_data, n_samples)
 
     if result == 0 then
+        if auto_detect then
+            local lang_id = whisper.whisper_full_lang_id(ctx)
+            local lang_str = ffi.string(whisper.whisper_lang_str(lang_id))
+            print("Detected language: " .. lang_str)
+        end
+
         local n_segments = whisper.whisper_full_n_segments(ctx)
         if n_segments == 0 then
             print("No speech detected!")
@@ -176,28 +192,22 @@ end
 local whisper = ffi.load("whisper.dll")
 
 print("Initializing Whisper model...")
--- local ctx = whisper.whisper_init_from_file("ggml-base.bin")
--- local ctx = whisper.whisper_init_from_file("ggml-base-q5_1.bin")
--- local ctx = whisper.whisper_init_from_file("ggml-tiny.bin")
-local ctx = whisper.whisper_init_from_file("ggml-tiny-q5_1.bin")
+local ctx = whisper.whisper_init_from_file("ggml-base-q5_1.bin")
 if ctx == nil then
     error("Failed to initialize whisper context")
 end
 
 print("\nLoading audio file with miniaudio...")
 local audio_file = "sample1.wav"
--- local audio_file = "sample1.mp3"
--- local audio_file = "sample1.ogg"
--- local audio_file = "sample1.flac"
 local audio_data, n_samples = audio_conv.load_audio(audio_file, 16000)
 
 print(string.format("Loaded %d samples at 16000 Hz (%.2f seconds)\n", n_samples, n_samples / 16000))
 
-print("=== Korean Original ===")
-transcribe_and_print(whisper, ctx, audio_data, n_samples, "ko", false, true)
+print("=== Auto-detected Language (Original) ===")
+transcribe_and_print(whisper, ctx, audio_data, n_samples, true, false, true)
 
 print("\n=== English Translation ===")
-transcribe_and_print(whisper, ctx, audio_data, n_samples, "ko", true, false)
+transcribe_and_print(whisper, ctx, audio_data, n_samples, false, true, false)
 
 whisper.whisper_free(ctx)
 print("\nDone!")
