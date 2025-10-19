@@ -1,5 +1,10 @@
 local ffi = require "ffi"
 
+-- Add current directory to package path for audio_conv.lua
+package.path = package.path .. ";./?.lua"
+
+local audio_conv = require "audio_conv"
+
 ffi.cdef [[
     typedef struct whisper_context whisper_context;
     typedef int32_t whisper_token;
@@ -108,13 +113,6 @@ ffi.cdef [[
         struct whisper_context * ctx,
         int i_segment);
 
-    typedef struct FILE FILE;
-    FILE *fopen(const char *filename, const char *mode);
-    int fclose(FILE *stream);
-    size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream);
-    void *malloc(size_t size);
-    void free(void *ptr);
-
     typedef unsigned short wchar_t;
     int MultiByteToWideChar(unsigned int CodePage, unsigned long dwFlags, const char* lpMultiByteStr, int cbMultiByte, wchar_t* lpWideCharStr, int cchWideChar);
     int WideCharToMultiByte(unsigned int CodePage, unsigned long dwFlags, const wchar_t* lpWideCharStr, int cchWideChar, char* lpMultiByteStr, int cbMultiByte, const char* lpDefaultChar, int* lpUsedDefaultChar);
@@ -145,93 +143,6 @@ local function utf8_to_cp949(utf8_str)
     ffi.C.WideCharToMultiByte(CP_ACP, 0, wide_str, -1, cp949_str, cp949_len, nil, nil)
 
     return ffi.string(cp949_str)
-end
-
--- Resample basic - Nearest neighbor
-local function resample_audio_basic(samples, n_samples, src_rate, dst_rate)
-    local ratio = src_rate / dst_rate
-    local new_n_samples = math.floor(n_samples / ratio)
-    local resampled = ffi.new("float[?]", new_n_samples)
-
-    for i = 0, new_n_samples - 1 do
-        local src_idx = math.floor(i * ratio)
-        if src_idx < n_samples then
-            resampled[i] = samples[src_idx]
-        end
-    end
-
-    return resampled, new_n_samples
-end
-
--- Resample Linear
-local function resample_audio_linear(samples, n_samples, src_rate, dst_rate)
-    local ratio = src_rate / dst_rate
-    local new_n_samples = math.floor(n_samples / ratio)
-    local resampled = ffi.new("float[?]", new_n_samples)
-
-    for i = 0, new_n_samples - 1 do
-        local src_pos = i * ratio
-        local src_idx = math.floor(src_pos)
-        local frac = src_pos - src_idx
-
-        if src_idx < n_samples - 1 then
-            resampled[i] = samples[src_idx] * (1 - frac) + samples[src_idx + 1] * frac
-        elseif src_idx < n_samples then
-            resampled[i] = samples[src_idx]
-        end
-    end
-
-    return resampled, new_n_samples
-end
-
-local function read_wav_file(filename)
-    local file = ffi.C.fopen(filename, "rb")
-    if file == nil then
-        error("Failed to open file: " .. filename)
-    end
-
-    local header = ffi.new("uint8_t[44]")
-    ffi.C.fread(header, 1, 44, file)
-
-    local channels = header[22] + header[23] * 256
-    local sample_rate = header[24] + header[25] * 256 + header[26] * 65536 + header[27] * 16777216
-    local bits_per_sample = header[34] + header[35] * 256
-    local data_size = header[40] + header[41] * 256 + header[42] * 65536 + header[43] * 16777216
-
-    print(string.format("WAV Info - Channels: %d, Sample Rate: %d Hz, Bits: %d", channels, sample_rate, bits_per_sample))
-
-    local num_samples = data_size / (bits_per_sample / 8) / channels
-    local raw_data = ffi.C.malloc(data_size)
-    ffi.C.fread(raw_data, 1, data_size, file)
-    ffi.C.fclose(file)
-
-    local samples = ffi.new("float[?]", num_samples)
-
-    if bits_per_sample == 16 then
-        local int16_data = ffi.cast("int16_t*", raw_data)
-        for i = 0, num_samples - 1 do
-            local sample_val = 0
-            if channels == 1 then
-                sample_val = int16_data[i]
-            else
-                sample_val = int16_data[i * channels]
-            end
-            samples[i] = sample_val / 32768.0
-        end
-    elseif bits_per_sample == 32 then
-        local float_data = ffi.cast("float*", raw_data)
-        for i = 0, num_samples - 1 do
-            if channels == 1 then
-                samples[i] = float_data[i]
-            else
-                samples[i] = float_data[i * channels]
-            end
-        end
-    end
-
-    ffi.C.free(raw_data)
-
-    return samples, num_samples, sample_rate
 end
 
 local function transcribe_and_print(whisper, ctx, audio_data, n_samples, language, translate, convert_to_cp949)
@@ -266,25 +177,21 @@ local whisper = ffi.load("whisper.dll")
 
 print("Initializing Whisper model...")
 -- local ctx = whisper.whisper_init_from_file("ggml-base.bin")
-local ctx = whisper.whisper_init_from_file("ggml-base-q5_1.bin")
--- local ctx = whisper.whisper_init_from_file("ggml-tiny-q5_1.bin")
+-- local ctx = whisper.whisper_init_from_file("ggml-base-q5_1.bin")
 -- local ctx = whisper.whisper_init_from_file("ggml-tiny.bin")
+local ctx = whisper.whisper_init_from_file("ggml-tiny-q5_1.bin")
 if ctx == nil then
     error("Failed to initialize whisper context")
 end
 
-print("\nReading audio file...")
-local audio_data, n_samples, sample_rate = read_wav_file("sample1.wav")
+print("\nLoading audio file with miniaudio...")
+local audio_file = "sample1.wav"
+-- local audio_file = "sample1.mp3"
+-- local audio_file = "sample1.ogg"
+-- local audio_file = "sample1.flac"
+local audio_data, n_samples = audio_conv.load_audio(audio_file, 16000)
 
-local target_rate = 16000
-if sample_rate ~= target_rate then
-    print(string.format("Resampling from %d Hz to %d Hz...", sample_rate, target_rate))
-    -- audio_data, n_samples = resample_audio_basic(audio_data, n_samples, sample_rate, target_rate)
-    audio_data, n_samples = resample_audio_linear(audio_data, n_samples, sample_rate, target_rate)
-    sample_rate = target_rate
-end
-
-print(string.format("Processing %d samples at %d Hz (%.2f seconds)\n", n_samples, sample_rate, n_samples / sample_rate))
+print(string.format("Loaded %d samples at 16000 Hz (%.2f seconds)\n", n_samples, n_samples / 16000))
 
 print("=== Korean Original ===")
 transcribe_and_print(whisper, ctx, audio_data, n_samples, "ko", false, true)
