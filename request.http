@@ -1,0 +1,50 @@
+### Variables
+@baseUrl = http://localhost:8080
+
+
+### Health Check
+GET {{baseUrl}}/health
+
+
+### Transcribe WAV
+POST {{baseUrl}}/transcribe
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="file"; filename="sample1.wav"
+Content-Type: audio/wav
+
+< samples/sample1.wav
+------WebKitFormBoundary7MA4YWxkTrZu0gW--
+
+
+### Transcribe MP3
+POST {{baseUrl}}/transcribe
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="file"; filename="sample.mp3"
+Content-Type: audio/mpeg
+
+< samples/sample1.mp3
+------WebKitFormBoundary7MA4YWxkTrZu0gW--
+
+
+### Transcribe OGG with translation
+POST {{baseUrl}}/transcribe
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="file"; filename="sample.ogg"
+Content-Type: audio/ogg
+
+< samples/sample1.ogg
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="auto_detect"
+
+true
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="translate"
+
+true
+------WebKitFormBoundary7MA4YWxkTrZu0gW--

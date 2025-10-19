@@ -1,6 +1,3 @@
-/ggml-base.bin
-/ggml-base-q5_1.bin
-/ggml-tiny.bin
-/ggml-tiny-q5_1.bin
+/models/*.bin
 /audio/*.a
 /audio/*.dll

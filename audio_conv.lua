@@ -48,7 +48,7 @@ ffi.cdef [[
 
 local MA_SUCCESS = 0
 
-local ma = ffi.load("miniaudio.dll")
+local ma = ffi.load("vendor/miniaudio/miniaudio.dll")
 
 local audio_conv = {}
 

@@ -1,8 +1,5 @@
-local ffi = require "ffi"
-
-package.path = package.path .. ";./?.lua"
-
-local audio_conv = require "audio_conv"
+local ffi = require("ffi")
+local audio_conv = require("audio_conv")
 
 ffi.cdef [[
     typedef struct whisper_context whisper_context;
@@ -123,7 +120,9 @@ ffi.cdef [[
 local CP_UTF8 = 65001
 local CP_ACP = 0
 
-local function utf8_to_cp949(utf8_str)
+local whisper_module = {}
+
+function whisper_module.utf8_to_acp(utf8_str)
     if not utf8_str or utf8_str == "" then
         return ""
     end
@@ -136,78 +135,120 @@ local function utf8_to_cp949(utf8_str)
     local wide_str = ffi.new("wchar_t[?]", wide_len)
     ffi.C.MultiByteToWideChar(CP_UTF8, 0, utf8_str, -1, wide_str, wide_len)
 
-    local cp949_len = ffi.C.WideCharToMultiByte(CP_ACP, 0, wide_str, -1, nil, 0, nil, nil)
-    if cp949_len <= 0 then
+    local acp_len = ffi.C.WideCharToMultiByte(CP_ACP, 0, wide_str, -1, nil, 0, nil, nil)
+    if acp_len <= 0 then
         return utf8_str
     end
 
-    local cp949_str = ffi.new("char[?]", cp949_len)
-    ffi.C.WideCharToMultiByte(CP_ACP, 0, wide_str, -1, cp949_str, cp949_len, nil, nil)
+    local acp_str = ffi.new("char[?]", acp_len)
+    ffi.C.WideCharToMultiByte(CP_ACP, 0, wide_str, -1, acp_str, acp_len, nil, nil)
 
-    return ffi.string(cp949_str)
+    return ffi.string(acp_str)
 end
 
-local function transcribe_and_print(whisper, ctx, audio_data, n_samples, auto_detect, translate, convert_to_cp949)
-    local params = whisper.whisper_full_default_params(0)
+whisper_module.utf8_to_cp949 = whisper_module.utf8_to_acp
+
+function whisper_module.get_console_codepage()
+    local is_windows = package.config:sub(1, 1) == '\\'
+    if not is_windows then
+        return nil
+    end
+
+    local handle = io.popen("chcp 2>nul")
+    if not handle then
+        return 949
+    end
+
+    local output = handle:read("*a")
+    handle:close()
+
+    local codepage = output:match("(%d+)")
+    return tonumber(codepage) or 949
+end
+
+function whisper_module.utf8_to_console(utf8_str)
+    local codepage = whisper_module.get_console_codepage()
+
+    if not codepage or codepage == 65001 then
+        return utf8_str
+    end
+
+    return whisper_module.utf8_to_acp(utf8_str)
+end
+
+function whisper_module.create_context(model_path)
+    local whisper_lib = ffi.load("whisper.dll")
+    local ctx = whisper_lib.whisper_init_from_file(model_path)
+    if ctx == nil then
+        return nil, "Failed to initialize whisper context"
+    end
+    return {
+        ctx = ctx,
+        lib = whisper_lib
+    }
+end
+
+function whisper_module.free_context(whisper_ctx)
+    if whisper_ctx and whisper_ctx.ctx then
+        whisper_ctx.lib.whisper_free(whisper_ctx.ctx)
+        whisper_ctx.ctx = nil
+    end
+end
+
+function whisper_module.transcribe(whisper_ctx, audio_file, options)
+    options = options or {}
+    local language = options.language or "ko"
+    local auto_detect = options.auto_detect or false
+    local translate = options.translate or false
+    local sample_rate = options.sample_rate or 16000
+
+    local audio_data, n_samples = audio_conv.load_audio(audio_file, sample_rate)
+
+    local params = whisper_ctx.lib.whisper_full_default_params(0)
 
     if auto_detect then
         params.language = nil
         params.detect_language = false
     else
-        params.language = "ko"
+        params.language = language
         params.detect_language = false
     end
 
     params.translate = translate
     params.print_progress = false
 
-    local result = whisper.whisper_full(ctx, params, audio_data, n_samples)
+    local result = whisper_ctx.lib.whisper_full(whisper_ctx.ctx, params, audio_data, n_samples)
 
-    if result == 0 then
-        if auto_detect then
-            local lang_id = whisper.whisper_full_lang_id(ctx)
-            local lang_str = ffi.string(whisper.whisper_lang_str(lang_id))
-            print("Detected language: " .. lang_str)
-        end
-
-        local n_segments = whisper.whisper_full_n_segments(ctx)
-        if n_segments == 0 then
-            print("No speech detected!")
-        else
-            for i = 0, n_segments - 1 do
-                local text = ffi.string(whisper.whisper_full_get_segment_text(ctx, i))
-                if convert_to_cp949 then
-                    text = utf8_to_cp949(text)
-                end
-                local t0 = tonumber(whisper.whisper_full_get_segment_t0(ctx, i)) / 100.0
-                local t1 = tonumber(whisper.whisper_full_get_segment_t1(ctx, i)) / 100.0
-                print(string.format("[%.2fs -> %.2fs]: %s", t0, t1, text))
-            end
-        end
-    else
-        print("Failed with code: " .. result)
+    if result ~= 0 then
+        return nil, "Transcription failed with code: " .. result
     end
+
+    local detected_language = nil
+    if auto_detect then
+        local lang_id = whisper_ctx.lib.whisper_full_lang_id(whisper_ctx.ctx)
+        detected_language = ffi.string(whisper_ctx.lib.whisper_lang_str(lang_id))
+    end
+
+    local segments = {}
+    local n_segments = whisper_ctx.lib.whisper_full_n_segments(whisper_ctx.ctx)
+
+    for i = 0, n_segments - 1 do
+        local text = ffi.string(whisper_ctx.lib.whisper_full_get_segment_text(whisper_ctx.ctx, i))
+        local t0 = tonumber(whisper_ctx.lib.whisper_full_get_segment_t0(whisper_ctx.ctx, i)) / 100.0
+        local t1 = tonumber(whisper_ctx.lib.whisper_full_get_segment_t1(whisper_ctx.ctx, i)) / 100.0
+
+        table.insert(segments, {
+            text = text,
+            start = t0,
+            ["end"] = t1
+        })
+    end
+
+    return {
+        segments = segments,
+        language = detected_language,
+        duration = n_samples / sample_rate
+    }
 end
 
-local whisper = ffi.load("whisper.dll")
-
-print("Initializing Whisper model...")
-local ctx = whisper.whisper_init_from_file("ggml-base-q5_1.bin")
-if ctx == nil then
-    error("Failed to initialize whisper context")
-end
-
-print("\nLoading audio file with miniaudio...")
-local audio_file = "sample1.wav"
-local audio_data, n_samples = audio_conv.load_audio(audio_file, 16000)
-
-print(string.format("Loaded %d samples at 16000 Hz (%.2f seconds)\n", n_samples, n_samples / 16000))
-
-print("=== Auto-detected Language (Original) ===")
-transcribe_and_print(whisper, ctx, audio_data, n_samples, true, false, true)
-
-print("\n=== English Translation ===")
-transcribe_and_print(whisper, ctx, audio_data, n_samples, false, true, false)
-
-whisper.whisper_free(ctx)
-print("\nDone!")
+return whisper_module
